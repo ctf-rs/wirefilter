@@ -7,6 +7,7 @@ use super::visitor::{Visitor, VisitorMut};
 use crate::compiler::Compiler;
 use crate::filter::{CompiledExpr, CompiledOneExpr, CompiledVecExpr};
 use crate::lex::{Lex, LexErrorKind, LexResult, LexWith, expect, skip_space, span};
+use crate::source::CompletionExpectation;
 use crate::types::{GetType, LhsValue, Type, TypeMismatchError};
 use serde::Serialize;
 
@@ -121,6 +122,7 @@ impl GetType for QuantifierArgExpr {
 
 impl<'i, 's> LexWith<'i, &FilterParser<'s>> for QuantifierArgExpr {
     fn lex_with(input: &'i str, parser: &FilterParser<'s>) -> LexResult<'i, Self> {
+        parser.record_completion(CompletionExpectation::Field, None, input);
         let (arg, rest) = FunctionCallArgExpr::lex_with(input, parser)?;
         let arg = match arg {
             FunctionCallArgExpr::IndexExpr(index_expr) => Self::IndexExpr(index_expr),
@@ -199,8 +201,13 @@ impl GetType for LogicalExpr {
 }
 
 impl LogicalExpr {
-    fn lex_combining_op(input: &str) -> (Option<LogicalOp>, &str) {
-        match LogicalOp::lex(skip_space(input)) {
+    fn lex_combining_op<'i>(
+        input: &'i str,
+        parser: &FilterParser<'_>,
+    ) -> (Option<LogicalOp>, &'i str) {
+        let logical_input = skip_space(input);
+        parser.record_completion(CompletionExpectation::Logical, None, logical_input);
+        match LogicalOp::lex(logical_input) {
             Ok((op, input)) => (Some(op), skip_space(input)),
             Err(_) => (None, input),
         }
@@ -227,6 +234,7 @@ impl LogicalExpr {
     }
 
     fn lex_simple_expr<'i>(input: &'i str, parser: &FilterParser<'_>) -> LexResult<'i, Self> {
+        parser.record_completion(CompletionExpectation::Field, None, input);
         Ok(if let Ok(rest) = expect(input, "(") {
             let nested_parser = parser.with_increased_nesting(input)?;
             let input = skip_space(rest);
@@ -269,7 +277,7 @@ impl LogicalExpr {
             let mut rhs = Self::lex_simple_expr(lookahead.1, parser)?;
 
             loop {
-                lookahead = Self::lex_combining_op(rhs.1);
+                lookahead = Self::lex_combining_op(rhs.1, parser);
                 if lookahead.0 <= Some(op) {
                     break;
                 }
@@ -326,7 +334,7 @@ impl LogicalExpr {
 impl<'i, 's> LexWith<'i, &FilterParser<'s>> for LogicalExpr {
     fn lex_with(input: &'i str, parser: &FilterParser<'s>) -> LexResult<'i, Self> {
         let (lhs, input) = Self::lex_simple_expr(input, parser)?;
-        let lookahead = Self::lex_combining_op(input);
+        let lookahead = Self::lex_combining_op(input, parser);
         lhs.lex_more_with_precedence(parser, None, lookahead)
     }
 }

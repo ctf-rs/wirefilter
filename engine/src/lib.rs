@@ -76,6 +76,7 @@ mod panic;
 mod range_set;
 mod rhs_types;
 mod searcher;
+mod source;
 mod strict_partial_ord;
 mod types;
 
@@ -87,7 +88,7 @@ pub use self::ast::index_expr::{Compare, IndexExpr};
 pub use self::ast::logical_expr::{
     LogicalExpr, LogicalOp, ParenthesizedExpr, QuantifierArgExpr, QuantifierOp, UnaryOp,
 };
-pub use self::ast::parse::{FilterParser, ParseError, ParserSettings};
+pub use self::ast::parse::{FilterParser, ParseError, ParseErrorSpan, ParserSettings};
 pub use self::ast::visitor::{Visitor, VisitorMut};
 pub use self::ast::{Expr, FilterAst, FilterValueAst, FilterValueExpr, ValueExpr};
 pub use self::compiler::{Compiler, DefaultCompiler};
@@ -121,6 +122,7 @@ pub use self::scheme::{
     FunctionRef, IdentifierRedefinitionError, IdentifierRegistrationError, IndexAccessError, List,
     ListRef, Scheme, SchemeBuilder, SchemeMismatchError, UnknownFieldError,
 };
+pub use self::source::{ComparisonSource, CompletionContext, CompletionExpectation, SourceRange};
 pub use self::types::{
     CompoundType, ExpectedType, ExpectedTypeList, GetType, LhsValue, LiteralSet, LiteralValue,
     Type, TypeMismatchError,

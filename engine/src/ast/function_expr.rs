@@ -117,7 +117,7 @@ impl FunctionCallArgExpr {
 
 impl<'i, 's> LexWith<'i, &FilterParser<'s>> for FunctionCallArgExpr {
     fn lex_with(input: &'i str, parser: &FilterParser<'s>) -> LexResult<'i, Self> {
-        let _initial_input = input;
+        let initial_input = input;
 
         macro_rules! c_is_field {
             // characters above F/f in the alphabet mean it can't be a decimal or hex int
@@ -160,12 +160,14 @@ impl<'i, 's> LexWith<'i, &FilterParser<'s>> for FunctionCallArgExpr {
                 let (lhs, input) = IndexExpr::lex_with(input, parser)?;
                 let lookahead = skip_space(input);
                 if ComparisonOp::lex(lookahead).is_ok() {
-                    return ComparisonExpr::lex_with_lhs(input, parser, lhs).map(|(op, input)| {
-                        (
-                            FunctionCallArgExpr::Logical(LogicalExpr::Comparison(op)),
-                            input,
-                        )
-                    });
+                    return ComparisonExpr::lex_with_lhs(initial_input, input, parser, lhs).map(
+                        |(op, input)| {
+                            (
+                                FunctionCallArgExpr::Logical(LogicalExpr::Comparison(op)),
+                                input,
+                            )
+                        },
+                    );
                 } else {
                     return Ok((FunctionCallArgExpr::IndexExpr(lhs), input));
                 }
@@ -173,19 +175,23 @@ impl<'i, 's> LexWith<'i, &FilterParser<'s>> for FunctionCallArgExpr {
         }
 
         // Fallback to blind parsing next argument
+        let checkpoint = parser.source_checkpoint();
         if let Ok((lhs, input)) = IndexExpr::lex_with(input, parser) {
             let lookahead = skip_space(input);
             if ComparisonOp::lex(lookahead).is_ok() {
-                return ComparisonExpr::lex_with_lhs(input, parser, lhs).map(|(op, input)| {
-                    (
-                        FunctionCallArgExpr::Logical(LogicalExpr::Comparison(op)),
-                        input,
-                    )
-                });
+                return ComparisonExpr::lex_with_lhs(initial_input, input, parser, lhs).map(
+                    |(op, input)| {
+                        (
+                            FunctionCallArgExpr::Logical(LogicalExpr::Comparison(op)),
+                            input,
+                        )
+                    },
+                );
             } else {
                 return Ok((FunctionCallArgExpr::IndexExpr(lhs), input));
             }
         }
+        parser.restore_source(checkpoint);
 
         LiteralValue::lex_with(input, Type::Ip)
             .map(|(literal, input)| (FunctionCallArgExpr::Literal(literal), input))
@@ -199,7 +205,7 @@ impl<'i, 's> LexWith<'i, &FilterParser<'s>> for FunctionCallArgExpr {
                 LiteralValue::lex_with(input, Type::Bytes)
                     .map(|(literal, input)| (FunctionCallArgExpr::Literal(literal), input))
             })
-            .map_err(|_| (LexErrorKind::EOF, _initial_input))
+            .map_err(|_| (LexErrorKind::EOF, initial_input))
     }
 }
 

@@ -10,6 +10,7 @@ use crate::range_set::RangeSet;
 use crate::rhs_types::{BytesExpr, ExplicitIpRange, ListName, Regex, Wildcard};
 use crate::scheme::{Field, Identifier, List};
 use crate::searcher::{EmptySearcher, MemmemSearcher};
+use crate::source::{ComparisonSource, CompletionExpectation, SourceRange};
 use crate::strict_partial_ord::StrictPartialOrd;
 use crate::types::{GetType, LhsValue, LiteralSet, LiteralValue, Type};
 use crate::{ExecutionContext, Scheme};
@@ -109,6 +110,10 @@ lex_enum!(ComparisonOp {
     IntOp => Int,
     BytesOp => Bytes,
 });
+
+pub(crate) fn lex_comparison_operator(input: &str) -> Result<&str, crate::lex::LexError<'_>> {
+    ComparisonOp::lex(input).map(|(_, rest)| rest)
+}
 
 /// Operator and right-hand side expression of a
 /// comparison expression.
@@ -298,19 +303,29 @@ impl GetType for ComparisonExpr {
 
 impl<'i> LexWith<'i, &FilterParser<'_>> for ComparisonExpr {
     fn lex_with(input: &'i str, parser: &FilterParser<'_>) -> LexResult<'i, Self> {
+        let initial_input = input;
         let (lhs, input) = IndexExpr::lex_with(input, parser)?;
 
-        Self::lex_with_lhs(input, parser, lhs)
+        Self::lex_with_lhs(initial_input, input, parser, lhs)
     }
 }
 
 impl ComparisonExpr {
     pub(crate) fn lex_with_lhs<'i>(
+        initial_input: &'i str,
         input: &'i str,
         parser: &FilterParser<'_>,
         lhs: IndexExpr,
     ) -> LexResult<'i, Self> {
         let lhs_type = lhs.get_type();
+        let identifier = match &lhs.identifier {
+            IdentifierExpr::Field(field) => field.name(),
+            IdentifierExpr::FunctionCallExpr(call) => call.function().name(),
+        };
+        let lhs_source = parser.source_range(initial_input, input);
+        let mut operator_source = lhs_source.map(|range| SourceRange::new(range.end, range.end));
+        let mut value_sources = Vec::new();
+        parser.begin_comparison_source(lhs_source, operator_source);
 
         let (op, input) = if lhs_type == Type::Bool {
             (ComparisonOpExpr::IsTrue, input)
@@ -329,18 +344,31 @@ impl ComparisonExpr {
             }
         } else {
             let initial_input = skip_space(input);
+            parser.record_completion(
+                CompletionExpectation::Operator,
+                Some(identifier),
+                initial_input,
+            );
             let (op, input) = ComparisonOp::lex(initial_input)?;
 
             let input_after_op = input;
+            operator_source = parser.source_range(initial_input, input_after_op);
+            parser.update_comparison_operator_source(operator_source);
 
             let input = skip_space(input);
+            parser.record_completion(CompletionExpectation::Value, Some(identifier), input);
 
             match (&lhs_type, op) {
                 (Type::Ip, ComparisonOp::In)
                 | (Type::Bytes, ComparisonOp::In)
                 | (Type::Int, ComparisonOp::In) => {
                     if expect(input, "$").is_ok() {
+                        let value_input = input;
                         let (name, input) = ListName::lex(input)?;
+                        if let Some(range) = parser.source_range(value_input, input) {
+                            value_sources.push(range);
+                            parser.record_comparison_value_source(range);
+                        }
                         let list = parser.scheme.get_list(&lhs_type).ok_or((
                             LexErrorKind::UnsupportedOp { lhs_type },
                             span(initial_input, input),
@@ -353,35 +381,61 @@ impl ComparisonExpr {
                             input,
                         )
                     } else {
-                        let (rhs, input) = LiteralSet::lex_with(input, lhs_type)?;
+                        let (rhs, ranges, input) =
+                            LiteralSet::lex_with_source(input, lhs_type, parser, identifier)?;
+                        value_sources = ranges;
                         (ComparisonOpExpr::OneOf(rhs), input)
                     }
                 }
                 (Type::Ip, ComparisonOp::Ordering(op))
                 | (Type::Bytes, ComparisonOp::Ordering(op))
                 | (Type::Int, ComparisonOp::Ordering(op)) => {
+                    let value_input = input;
                     let (rhs, input) = LiteralValue::lex_with(input, lhs_type)?;
+                    if let Some(range) = parser.source_range(value_input, input) {
+                        value_sources.push(range);
+                    }
                     (ComparisonOpExpr::Ordering { op, rhs }, input)
                 }
                 (Type::Int, ComparisonOp::Int(op)) => {
+                    let value_input = input;
                     let (rhs, input) = i64::lex(input)?;
+                    if let Some(range) = parser.source_range(value_input, input) {
+                        value_sources.push(range);
+                    }
                     (ComparisonOpExpr::Int { op, rhs }, input)
                 }
                 (Type::Bytes, ComparisonOp::Bytes(op)) => match op {
                     BytesOp::Contains => {
+                        let value_input = input;
                         let (bytes, input) = BytesExpr::lex(input)?;
+                        if let Some(range) = parser.source_range(value_input, input) {
+                            value_sources.push(range);
+                        }
                         (ComparisonOpExpr::Contains(bytes), input)
                     }
                     BytesOp::Matches => {
+                        let value_input = input;
                         let (regex, input) = Regex::lex_with(input, parser)?;
+                        if let Some(range) = parser.source_range(value_input, input) {
+                            value_sources.push(range);
+                        }
                         (ComparisonOpExpr::Matches(regex), input)
                     }
                     BytesOp::Wildcard => {
+                        let value_input = input;
                         let (wildcard, input) = Wildcard::lex_with(input, parser)?;
+                        if let Some(range) = parser.source_range(value_input, input) {
+                            value_sources.push(range);
+                        }
                         (ComparisonOpExpr::Wildcard(wildcard), input)
                     }
                     BytesOp::StrictWildcard => {
+                        let value_input = input;
                         let (wildcard, input) = Wildcard::lex_with(input, parser)?;
+                        if let Some(range) = parser.source_range(value_input, input) {
+                            value_sources.push(range);
+                        }
                         (ComparisonOpExpr::StrictWildcard(wildcard), input)
                     }
                 },
@@ -393,6 +447,19 @@ impl ComparisonExpr {
                 }
             }
         };
+
+        if let (Some(lhs), Some(operator)) = (lhs_source, operator_source) {
+            parser.finish_comparison_source(ComparisonSource {
+                lhs,
+                operator,
+                values: value_sources,
+            });
+        }
+        parser.record_completion(
+            CompletionExpectation::Logical,
+            Some(identifier),
+            skip_space(input),
+        );
 
         Ok((ComparisonExpr { lhs, op }, input))
     }

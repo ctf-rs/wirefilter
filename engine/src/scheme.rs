@@ -1042,7 +1042,8 @@ fn test_parse_error() {
                 input: "xyz",
                 line_number: 0,
                 span_start: 0,
-                span_len: 3
+                span_len: 3,
+                absolute_span_start: 0,
             }
         );
         assert_eq!(
@@ -1066,7 +1067,8 @@ fn test_parse_error() {
                 input: "xyz",
                 line_number: 0,
                 span_start: 0,
-                span_len: 3
+                span_len: 3,
+                absolute_span_start: 0,
             }
         );
         assert_eq!(
@@ -1090,7 +1092,8 @@ fn test_parse_error() {
                 input: "    xyz",
                 line_number: 2,
                 span_start: 4,
-                span_len: 3
+                span_len: 3,
+                absolute_span_start: 6,
             }
         );
         assert_eq!(
@@ -1122,7 +1125,8 @@ fn test_parse_error() {
                 input: "num == true or",
                 line_number: 1,
                 span_start: 7,
-                span_len: 7
+                span_len: 7,
+                absolute_span_start: 20,
             }
         );
         assert_eq!(
@@ -1152,19 +1156,20 @@ fn test_parse_error() {
                     expected: Type::Bool.into(),
                     actual: Type::Array(Type::Bool.into()),
                 }),
-                input: "arr and arr",
-                line_number: 0,
-                span_start: 11,
+                input: "",
+                line_number: 1,
+                span_start: 0,
                 span_len: 0,
+                absolute_span_start: 12,
             }
         );
         assert_eq!(
             err.to_string(),
             indoc!(
                 r#"
-                Filter parsing error (1:12):
-                arr and arr
-                           ^ expected value of type Bool, but got Array<Bool>
+                Filter parsing error (2:1):
+
+                ^ expected value of type Bool, but got Array<Bool>
                 "#
             )
         );
@@ -1183,6 +1188,7 @@ fn test_parse_error() {
                 line_number: 0,
                 span_start: 1,
                 span_len: 6,
+                absolute_span_start: 1,
             }
         );
         assert_eq!(
@@ -1207,6 +1213,7 @@ fn test_parse_error() {
                 line_number: 0,
                 span_start: 8,
                 span_len: 0,
+                absolute_span_start: 8,
             }
         );
         assert_eq!(
@@ -1231,6 +1238,7 @@ fn test_parse_error() {
                 line_number: 0,
                 span_start: 11,
                 span_len: 0,
+                absolute_span_start: 11,
             }
         );
         assert_eq!(
@@ -1255,6 +1263,7 @@ fn test_parse_error() {
                 line_number: 0,
                 span_start: 8,
                 span_len: 0,
+                absolute_span_start: 8,
             }
         );
         assert_eq!(
@@ -1287,6 +1296,7 @@ fn test_parse_error() {
                 line_number: 0,
                 span_start: 7,
                 span_len: 1,
+                absolute_span_start: 7,
             }
         );
         assert_eq!(
@@ -1393,7 +1403,8 @@ fn test_parse_error_in_op() {
                 input: "bool in {0}",
                 line_number: 0,
                 span_start: 4,
-                span_len: 7
+                span_len: 7,
+                absolute_span_start: 4,
             }
         );
         assert_eq!(
@@ -1417,7 +1428,8 @@ fn test_parse_error_in_op() {
                 input: "bool in {127.0.0.1}",
                 line_number: 0,
                 span_start: 4,
-                span_len: 15
+                span_len: 15,
+                absolute_span_start: 4,
             }
         );
         assert_eq!(
@@ -1441,7 +1453,8 @@ fn test_parse_error_in_op() {
                 input: "bool in {\"test\"}",
                 line_number: 0,
                 span_start: 4,
-                span_len: 12
+                span_len: 12,
+                absolute_span_start: 4,
             }
         );
         assert_eq!(
@@ -1465,7 +1478,8 @@ fn test_parse_error_in_op() {
                 input: "num in {127.0.0.1}",
                 line_number: 0,
                 span_start: 11,
-                span_len: 7
+                span_len: 7,
+                absolute_span_start: 11,
             }
         );
         assert_eq!(
@@ -1489,7 +1503,8 @@ fn test_parse_error_in_op() {
                 input: "num in {\"test\"}",
                 line_number: 0,
                 span_start: 8,
-                span_len: 7
+                span_len: 7,
+                absolute_span_start: 8,
             }
         );
         assert_eq!(
@@ -1516,7 +1531,8 @@ fn test_parse_error_in_op() {
                 input: "ip in {666}",
                 line_number: 0,
                 span_start: 7,
-                span_len: 3
+                span_len: 3,
+                absolute_span_start: 7,
             }
         );
         assert_eq!(
@@ -1539,7 +1555,8 @@ fn test_parse_error_in_op() {
                 input: "ip in {\"test\"}",
                 line_number: 0,
                 span_start: 7,
-                span_len: 7
+                span_len: 7,
+                absolute_span_start: 7,
             }
         );
         assert_eq!(
@@ -1566,7 +1583,8 @@ fn test_parse_error_in_op() {
                 input: "str in {0}",
                 line_number: 0,
                 span_start: 8,
-                span_len: 2
+                span_len: 2,
+                absolute_span_start: 8,
             }
         );
         assert_eq!(
@@ -1590,7 +1608,8 @@ fn test_parse_error_in_op() {
                 input: "str in {127.0.0.1}",
                 line_number: 0,
                 span_start: 10,
-                span_len: 1
+                span_len: 1,
+                absolute_span_start: 10,
             }
         );
         assert_eq!(
@@ -1618,7 +1637,8 @@ fn test_parse_error_in_op() {
                     input: &filter,
                     line_number: 0,
                     span_start: 8,
-                    span_len: 2
+                    span_len: 2,
+                    absolute_span_start: 8,
                 }
             );
         }
@@ -1635,7 +1655,8 @@ fn test_parse_error_in_op() {
                     input: &filter,
                     line_number: 0,
                     span_start: 8,
-                    span_len: 2
+                    span_len: 2,
+                    absolute_span_start: 8,
                 }
             );
         }
@@ -1665,7 +1686,8 @@ fn test_parse_error_ordering_op() {
                     input: &filter,
                     line_number: 0,
                     span_start: 10,
-                    span_len: 6
+                    span_len: 6,
+                    absolute_span_start: 10,
                 }
             );
         }
@@ -1680,7 +1702,8 @@ fn test_parse_error_ordering_op() {
                     input: &filter,
                     line_number: 0,
                     span_start: 7,
-                    span_len: 6
+                    span_len: 6,
+                    absolute_span_start: 7,
                 }
             );
         }
@@ -1698,7 +1721,8 @@ fn test_parse_error_ordering_op() {
                     input: &filter,
                     line_number: 0,
                     span_start: 7,
-                    span_len: 1
+                    span_len: 1,
+                    absolute_span_start: 7,
                 }
             );
         }
@@ -1713,7 +1737,8 @@ fn test_parse_error_ordering_op() {
                     input: &filter,
                     line_number: 0,
                     span_start: 9,
-                    span_len: 1
+                    span_len: 1,
+                    absolute_span_start: 9,
                 }
             );
         }
@@ -1729,6 +1754,7 @@ fn test_parse_error_ordering_op() {
                     line_number: 0,
                     span_start: 9,
                     span_len: 1,
+                    absolute_span_start: 9,
                 }
             );
         }
@@ -1745,7 +1771,8 @@ fn test_parse_error_ordering_op() {
                     input: &filter,
                     line_number: 0,
                     span_start: 8,
-                    span_len: 2
+                    span_len: 2,
+                    absolute_span_start: 8,
                 }
             );
         }
@@ -1762,7 +1789,8 @@ fn test_parse_error_ordering_op() {
                     input: &filter,
                     line_number: 0,
                     span_start: 8,
-                    span_len: 2
+                    span_len: 2,
+                    absolute_span_start: 8,
                 }
             );
         }
@@ -1779,7 +1807,8 @@ fn test_parse_error_ordering_op() {
                     input: &filter,
                     line_number: 0,
                     span_start: 8,
-                    span_len: 2
+                    span_len: 2,
+                    absolute_span_start: 8,
                 }
             );
         }
@@ -1796,7 +1825,8 @@ fn test_parse_error_ordering_op() {
                     input: &filter,
                     line_number: 0,
                     span_start: 8,
-                    span_len: 2
+                    span_len: 2,
+                    absolute_span_start: 8,
                 }
             );
         }
@@ -1813,7 +1843,8 @@ fn test_parse_error_ordering_op() {
                     input: &filter,
                     line_number: 0,
                     span_start: 8,
-                    span_len: 2
+                    span_len: 2,
+                    absolute_span_start: 8,
                 }
             );
         }
@@ -1830,7 +1861,8 @@ fn test_parse_error_ordering_op() {
                     input: &filter,
                     line_number: 0,
                     span_start: 8,
-                    span_len: 2
+                    span_len: 2,
+                    absolute_span_start: 8,
                 }
             );
         }

@@ -13,9 +13,28 @@ use crate::compiler::{Compiler, DefaultCompiler};
 use crate::filter::{CompiledExpr, CompiledValueExpr, Filter, FilterValue};
 use crate::lex::{LexErrorKind, LexResult, LexWith};
 use crate::scheme::{Scheme, UnknownFieldError};
+use crate::source::ComparisonSource;
 use crate::types::{GetType, LhsValue, Type, TypeMismatchError};
 use serde::Serialize;
 use std::fmt::{self, Debug};
+use std::hash::{Hash, Hasher};
+
+#[derive(Clone, Default)]
+struct AstSourceMetadata {
+    comparisons: Vec<ComparisonSource>,
+}
+
+impl PartialEq for AstSourceMetadata {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for AstSourceMetadata {}
+
+impl Hash for AstSourceMetadata {
+    fn hash<H: Hasher>(&self, _: &mut H) {}
+}
 
 /// Trait used to represent node that evaluates to a [`bool`] (or a [`Vec<bool>`]).
 pub trait Expr:
@@ -63,6 +82,9 @@ pub struct FilterAst {
     scheme: Scheme,
 
     op: LogicalExpr,
+
+    #[serde(skip)]
+    source: AstSourceMetadata,
 }
 
 impl Debug for FilterAst {
@@ -90,6 +112,9 @@ impl<'i, 's> LexWith<'i, &FilterParser<'s>> for FilterAst {
                 FilterAst {
                     scheme: parser.scheme.clone(),
                     op,
+                    source: AstSourceMetadata {
+                        comparisons: parser.comparison_sources(),
+                    },
                 },
                 input,
             )),
@@ -117,6 +142,12 @@ impl FilterAst {
         &self.op
     }
 
+    /// Returns comparison source ranges in AST traversal order.
+    #[inline]
+    pub fn comparison_sources(&self) -> &[ComparisonSource] {
+        &self.source.comparisons
+    }
+
     /// Recursively visit all nodes in the AST using a [`Visitor`].
     #[inline]
     pub fn walk<'a, V: Visitor<'a>>(&'a self, visitor: &mut V) {
@@ -124,8 +155,12 @@ impl FilterAst {
     }
 
     /// Recursively visit all nodes in the AST using a [`VisitorMut`].
+    ///
+    /// Calling this invalidates parser-owned source metadata, because mutable
+    /// visitors may change nodes without preserving their original ranges.
     #[inline]
     pub fn walk_mut<'a, V: VisitorMut<'a>>(&'a mut self, visitor: &mut V) {
+        self.source.comparisons.clear();
         visitor.visit_logical_expr(&mut self.op)
     }
 
@@ -194,14 +229,17 @@ impl Debug for FilterValueExpr {
 
 impl<'i, 's> LexWith<'i, &FilterParser<'s>> for FilterValueExpr {
     fn lex_with(input: &'i str, parser: &FilterParser<'s>) -> LexResult<'i, Self> {
+        let checkpoint = parser.source_checkpoint();
         match IndexExpr::lex_with(input, parser) {
             Ok((expr, rest)) => Ok((FilterValueExpr::Index(expr), rest)),
-            Err(index_err) => match LogicalExpr::lex_quantifier(input, parser) {
-                Some(result) => {
-                    result.map(|((op, arg), rest)| (FilterValueExpr::Quantifier { op, arg }, rest))
+            Err(index_err) => {
+                parser.restore_source(checkpoint);
+                match LogicalExpr::lex_quantifier(input, parser) {
+                    Some(result) => result
+                        .map(|((op, arg), rest)| (FilterValueExpr::Quantifier { op, arg }, rest)),
+                    None => Err(index_err),
                 }
-                None => Err(index_err),
-            },
+            }
         }
     }
 }
@@ -257,6 +295,9 @@ pub struct FilterValueAst {
     scheme: Scheme,
 
     op: FilterValueExpr,
+
+    #[serde(skip)]
+    source: AstSourceMetadata,
 }
 
 impl Debug for FilterValueAst {
@@ -283,6 +324,9 @@ impl<'i, 's> LexWith<'i, &FilterParser<'s>> for FilterValueAst {
                 FilterValueAst {
                     scheme: parser.scheme().clone(),
                     op,
+                    source: AstSourceMetadata {
+                        comparisons: parser.comparison_sources(),
+                    },
                 },
                 rest,
             ))
@@ -303,6 +347,12 @@ impl FilterValueAst {
         &self.op
     }
 
+    /// Returns comparison source ranges in AST traversal order.
+    #[inline]
+    pub fn comparison_sources(&self) -> &[ComparisonSource] {
+        &self.source.comparisons
+    }
+
     /// Recursively visit all nodes in the AST using a [`Visitor`].
     #[inline]
     pub fn walk<'a, V: Visitor<'a>>(&'a self, visitor: &mut V) {
@@ -310,8 +360,12 @@ impl FilterValueAst {
     }
 
     /// Recursively visit all nodes in the AST using a [`VisitorMut`].
+    ///
+    /// Calling this invalidates parser-owned source metadata, because mutable
+    /// visitors may change nodes without preserving their original ranges.
     #[inline]
     pub fn walk_mut<'a, V: VisitorMut<'a>>(&'a mut self, visitor: &mut V) {
+        self.source.comparisons.clear();
         visitor.visit_value_expr(&mut self.op)
     }
 

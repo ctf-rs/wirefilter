@@ -1,9 +1,11 @@
+use crate::ast::parse::FilterParser;
 use crate::lex::{Lex, LexResult, LexWith, expect, skip_space};
 use crate::lhs_types::{Array, ArrayIntoIter, ArrayIter, Bytes, Map, MapIter, MapValuesIntoIter};
 use crate::rhs_types::{
     BytesExpr, IntRange, IpRange, UninhabitedArray, UninhabitedBool, UninhabitedMap,
 };
 use crate::scheme::{FieldIndex, IndexAccessError};
+use crate::source::{CompletionExpectation, SourceRange};
 use crate::strict_partial_ord::StrictPartialOrd;
 #[cfg(feature = "get-size2")]
 use get_size2::{GetSize, GetSizeTracker};
@@ -30,6 +32,31 @@ fn lex_literal_set<'i, T: Lex<'i>>(input: &'i str) -> LexResult<'i, Vec<T>> {
             res.push(item);
             input = rest;
         }
+    }
+}
+
+fn lex_literal_set_with_source<'i, T: Lex<'i>>(
+    input: &'i str,
+    parser: &FilterParser<'_>,
+    identifier: &str,
+) -> Result<(Vec<T>, Vec<SourceRange>, &'i str), crate::lex::LexError<'i>> {
+    let mut input = expect(input, "{")?;
+    let mut values = Vec::new();
+    let mut ranges = Vec::new();
+    loop {
+        input = skip_space(input);
+        parser.record_completion(CompletionExpectation::Value, Some(identifier), input);
+        if let Ok(rest) = expect(input, "}") {
+            return Ok((values, ranges, rest));
+        }
+        let value_input = input;
+        let (value, rest) = T::lex(input)?;
+        if let Some(range) = parser.source_range(value_input, rest) {
+            ranges.push(range);
+            parser.record_comparison_value_source(range);
+        }
+        values.push(value);
+        input = rest;
     }
 }
 
@@ -339,6 +366,25 @@ macro_rules! declare_types {
         }
 
         impl LiteralSet {
+            pub(crate) fn lex_with_source<'i>(
+                input: &'i str,
+                ty: Type,
+                parser: &FilterParser<'_>,
+                identifier: &str,
+            ) -> Result<(Self, Vec<SourceRange>, &'i str), crate::lex::LexError<'i>> {
+                Ok(match ty {
+                    $(replace_underscore!($name $(($val_ty))?) => {
+                        let (values, ranges, input) =
+                            lex_literal_set_with_source::<$literal_set_ty>(
+                                input,
+                                parser,
+                                identifier,
+                            )?;
+                        (LiteralSet::$name(values), ranges, input)
+                    })*
+                })
+            }
+
             /// Appends a value to the back of the collection.
             pub fn push(&mut self, literal: LiteralValue) -> Result<(), TypeMismatchError> {
                 match self {
