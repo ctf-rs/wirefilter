@@ -161,12 +161,7 @@ impl<'i, 's> LexWith<'i, &FilterParser<'s>> for FunctionCallArgExpr {
                 let lookahead = skip_space(input);
                 if ComparisonOp::lex(lookahead).is_ok() {
                     return ComparisonExpr::lex_with_lhs(initial_input, input, parser, lhs).map(
-                        |(op, input)| {
-                            (
-                                FunctionCallArgExpr::Logical(LogicalExpr::Comparison(op)),
-                                input,
-                            )
-                        },
+                        |(op, input)| (FunctionCallArgExpr::Logical(op.into_logical()), input),
                     );
                 } else {
                     return Ok((FunctionCallArgExpr::IndexExpr(lhs), input));
@@ -179,14 +174,8 @@ impl<'i, 's> LexWith<'i, &FilterParser<'s>> for FunctionCallArgExpr {
         if let Ok((lhs, input)) = IndexExpr::lex_with(input, parser) {
             let lookahead = skip_space(input);
             if ComparisonOp::lex(lookahead).is_ok() {
-                return ComparisonExpr::lex_with_lhs(initial_input, input, parser, lhs).map(
-                    |(op, input)| {
-                        (
-                            FunctionCallArgExpr::Logical(LogicalExpr::Comparison(op)),
-                            input,
-                        )
-                    },
-                );
+                return ComparisonExpr::lex_with_lhs(initial_input, input, parser, lhs)
+                    .map(|(op, input)| (FunctionCallArgExpr::Logical(op.into_logical()), input));
             } else {
                 return Ok((FunctionCallArgExpr::IndexExpr(lhs), input));
             }
@@ -1294,6 +1283,14 @@ mod tests {
                 }
             }
         );
+
+        let infix = FilterParser::new(&SCHEME)
+            .parse("any(http.request.headers.names[*] !in {\"Cookie\" \"Cookies\"})")
+            .unwrap();
+        let prefix = FilterParser::new(&SCHEME)
+            .parse("any(not http.request.headers.names[*] in {\"Cookie\" \"Cookies\"})")
+            .unwrap();
+        assert_eq!(infix, prefix);
     }
 
     #[test]

@@ -92,8 +92,13 @@ impl FilterParser<'_> {
             identifier: None,
             replacement: SourceRange::new(cursor, cursor),
         });
-        if prefix.trim_end().len() < prefix.len() {
+        let trimmed_end = prefix.trim_end().len();
+        let completing_multiword_operator = context.expectation == CompletionExpectation::Operator
+            && context.replacement.start < trimmed_end;
+        if trimmed_end < prefix.len() && !completing_multiword_operator {
             context.replacement = SourceRange::new(cursor, cursor);
+        } else if completing_multiword_operator {
+            context.replacement.end = cursor;
         }
 
         refine_completion(self, source, cursor, context)
@@ -341,6 +346,32 @@ mod tests {
     }
 
     #[test]
+    fn negated_comparison_sources_cover_complete_operators_and_original_values() {
+        let scheme = Scheme! {
+            bytes: Bytes,
+            int: Int,
+        }
+        .build();
+        let cases = [
+            (r#"bytes !contains "é""#, "!contains", r#""é""#),
+            (r#"bytes !wildcard "*é*""#, "!wildcard", r#""*é*""#),
+            (
+                r#"bytes !strict wildcard "*é*""#,
+                "!strict wildcard",
+                r#""*é*""#,
+            ),
+            ("int !in {1 2..4}", "!in", "1"),
+        ];
+
+        for (source, operator, first_value) in cases {
+            let ast = scheme.parse(source).unwrap();
+            let comparison = &ast.comparison_sources()[0];
+            assert_eq!(source_text(source, comparison.operator), operator);
+            assert_eq!(source_text(source, comparison.values[0]), first_value);
+        }
+    }
+
+    #[test]
     fn nested_comparison_sources_follow_ast_traversal_order() {
         let mut builder = Scheme! {
             bytes: Bytes,
@@ -398,6 +429,25 @@ mod tests {
                 Some("bytes"),
                 "str",
             ),
+            (
+                "bytes !con",
+                CompletionExpectation::Operator,
+                Some("bytes"),
+                "!con",
+            ),
+            (
+                "bytes !contains ",
+                CompletionExpectation::Value,
+                Some("bytes"),
+                "",
+            ),
+            (
+                "bytes !strict ",
+                CompletionExpectation::Operator,
+                Some("bytes"),
+                "!strict ",
+            ),
+            ("int !in {", CompletionExpectation::Value, Some("int"), ""),
             ("bytes == ", CompletionExpectation::Value, Some("bytes"), ""),
             (
                 "bytes == r#\"é",
@@ -502,6 +552,14 @@ mod tests {
         assert_eq!(context.expectation, CompletionExpectation::Operator);
         assert_eq!(context.identifier.as_deref(), Some("bytes"));
         assert_eq!(source_text(source, context.replacement), "==");
+
+        let source = r#"bytes !strict wildcard "x" and flag"#;
+        let operator_start = source.find("!strict").unwrap();
+        for cursor in operator_start..operator_start + "!strict wildcard".len() {
+            let context = parser.completion_context(source, cursor);
+            assert_eq!(context.expectation, CompletionExpectation::Operator);
+            assert_eq!(source_text(source, context.replacement), "!strict wildcard");
+        }
 
         let source = "int == 123";
         let context = parser.completion_context(source, source.find('1').unwrap() + 1);

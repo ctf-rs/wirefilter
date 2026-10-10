@@ -9,6 +9,23 @@ This is an execution engine for [Wireshark®](https://www.wireshark.org/)-like f
 It contains public APIs for parsing filter syntax, compiling them into
 an executable IR and, finally, executing filters against provided values.
 
+## Negated comparisons
+
+`!contains`, `!wildcard`, `!strict wildcard`, and `!in` negate their
+corresponding comparisons:
+
+```text
+http.ua !contains "bot"
+http.ua !wildcard "*bot*"
+http.ua !strict wildcard "*Bot*"
+port !in {80 443}
+```
+
+These forms normalize to prefix `not` in logical expressions, preserving
+precedence, missing-value behavior, and parser-owned source ranges. For example,
+`http.ua !contains "bot"` is equivalent to `not (http.ua contains "bot")`.
+The existing `!=` comparison is unchanged.
+
 ## Example
 
 ```rust

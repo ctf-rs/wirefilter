@@ -4,7 +4,7 @@ use super::parse::FilterParser;
 use super::visitor::{Visitor, VisitorMut};
 use crate::ast::index_expr::{Compare, IndexExpr};
 use crate::compiler::Compiler;
-use crate::filter::CompiledExpr;
+use crate::filter::{CompiledExpr, CompiledOneExpr, CompiledVecExpr};
 use crate::lex::{Lex, LexErrorKind, LexResult, LexWith, expect, skip_space, span};
 use crate::range_set::RangeSet;
 use crate::rhs_types::{BytesExpr, ExplicitIpRange, ListName, Regex, Wildcard};
@@ -104,7 +104,15 @@ lex_enum!(BytesOp {
     "strict wildcard" => StrictWildcard,
 });
 
+lex_enum!(NegatedOp {
+    "!contains" => Contains,
+    "!wildcard" => Wildcard,
+    "!strict wildcard" => StrictWildcard,
+    "!in" => In,
+});
+
 lex_enum!(ComparisonOp {
+    NegatedOp => Negated,
     "in" => In,
     OrderingOp => Ordering,
     IntOp => Int,
@@ -179,6 +187,10 @@ pub enum ComparisonOpExpr {
         /// List name
         name: ListName,
     },
+
+    /// Logical complement of a comparison.
+    #[serde(serialize_with = "serialize_negated")]
+    Negated(Box<ComparisonOpExpr>),
 }
 
 fn serialize_op_rhs<T, S>(op: &'static str, rhs: &T, ser: S) -> Result<S::Ok, S::Error>
@@ -231,6 +243,15 @@ fn serialize_contains_one_of<S: Serializer>(rhs: &[BytesExpr], ser: S) -> Result
 
 fn serialize_list<S: Serializer>(_: &List, name: &ListName, ser: S) -> Result<S::Ok, S::Error> {
     serialize_op_rhs("InList", name, ser)
+}
+
+fn serialize_negated<S: Serializer>(op: &ComparisonOpExpr, ser: S) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeStruct;
+
+    let mut out = ser.serialize_struct("ComparisonOpExpr", 2)?;
+    out.serialize_field("op", "Not")?;
+    out.serialize_field("arg", op)?;
+    out.end()
 }
 
 /// Represents either the access to a field's value or
@@ -361,7 +382,11 @@ impl ComparisonExpr {
             match (&lhs_type, op) {
                 (Type::Ip, ComparisonOp::In)
                 | (Type::Bytes, ComparisonOp::In)
-                | (Type::Int, ComparisonOp::In) => {
+                | (Type::Int, ComparisonOp::In)
+                | (Type::Ip, ComparisonOp::Negated(NegatedOp::In))
+                | (Type::Bytes, ComparisonOp::Negated(NegatedOp::In))
+                | (Type::Int, ComparisonOp::Negated(NegatedOp::In)) => {
+                    let negated = matches!(op, ComparisonOp::Negated(NegatedOp::In));
                     if expect(input, "$").is_ok() {
                         let value_input = input;
                         let (name, input) = ListName::lex(input)?;
@@ -373,10 +398,15 @@ impl ComparisonExpr {
                             LexErrorKind::UnsupportedOp { lhs_type },
                             span(initial_input, input),
                         ))?;
+                        let op = ComparisonOpExpr::InList {
+                            name,
+                            list: list.to_owned(),
+                        };
                         (
-                            ComparisonOpExpr::InList {
-                                name,
-                                list: list.to_owned(),
+                            if negated {
+                                ComparisonOpExpr::Negated(Box::new(op))
+                            } else {
+                                op
                             },
                             input,
                         )
@@ -384,7 +414,15 @@ impl ComparisonExpr {
                         let (rhs, ranges, input) =
                             LiteralSet::lex_with_source(input, lhs_type, parser, identifier)?;
                         value_sources = ranges;
-                        (ComparisonOpExpr::OneOf(rhs), input)
+                        let op = ComparisonOpExpr::OneOf(rhs);
+                        (
+                            if negated {
+                                ComparisonOpExpr::Negated(Box::new(op))
+                            } else {
+                                op
+                            },
+                            input,
+                        )
                     }
                 }
                 (Type::Ip, ComparisonOp::Ordering(op))
@@ -439,6 +477,34 @@ impl ComparisonExpr {
                         (ComparisonOpExpr::StrictWildcard(wildcard), input)
                     }
                 },
+                (
+                    Type::Bytes,
+                    ComparisonOp::Negated(
+                        op
+                        @ (NegatedOp::Contains | NegatedOp::Wildcard | NegatedOp::StrictWildcard),
+                    ),
+                ) => {
+                    let value_input = input;
+                    let (op, input) = match op {
+                        NegatedOp::Contains => {
+                            let (bytes, input) = BytesExpr::lex(input)?;
+                            (ComparisonOpExpr::Contains(bytes), input)
+                        }
+                        NegatedOp::Wildcard => {
+                            let (wildcard, input) = Wildcard::lex_with(input, parser)?;
+                            (ComparisonOpExpr::Wildcard(wildcard), input)
+                        }
+                        NegatedOp::StrictWildcard => {
+                            let (wildcard, input) = Wildcard::lex_with(input, parser)?;
+                            (ComparisonOpExpr::StrictWildcard(wildcard), input)
+                        }
+                        NegatedOp::In => unreachable!(),
+                    };
+                    if let Some(range) = parser.source_range(value_input, input) {
+                        value_sources.push(range);
+                    }
+                    (ComparisonOpExpr::Negated(Box::new(op)), input)
+                }
                 _ => {
                     return Err((
                         LexErrorKind::UnsupportedOp { lhs_type },
@@ -472,6 +538,18 @@ impl ComparisonExpr {
     /// Retrieves the operator applied to the left hand side expression.
     pub fn operator(&self) -> &ComparisonOpExpr {
         &self.op
+    }
+
+    pub(crate) fn into_logical(mut self) -> crate::ast::logical_expr::LogicalExpr {
+        if let ComparisonOpExpr::Negated(op) = self.op {
+            self.op = *op;
+            crate::ast::logical_expr::LogicalExpr::Unary {
+                op: crate::ast::logical_expr::UnaryOp::Not,
+                arg: Box::new(crate::ast::logical_expr::LogicalExpr::Comparison(self)),
+            }
+        } else {
+            crate::ast::logical_expr::LogicalExpr::Comparison(self)
+        }
     }
 }
 
@@ -853,6 +931,17 @@ impl Expr for ComparisonExpr {
                 }
 
                 lhs.compile_with(compiler, false, InList { name, list })
+            }
+            ComparisonOpExpr::Negated(op) => {
+                let expr = compiler.compile_comparison_expr(ComparisonExpr { lhs, op: *op });
+                match expr {
+                    CompiledExpr::One(one) => {
+                        CompiledExpr::One(CompiledOneExpr::new(move |ctx| !one.execute(ctx)))
+                    }
+                    CompiledExpr::Vec(vec) => CompiledExpr::Vec(CompiledVecExpr::new(move |ctx| {
+                        vec.execute(ctx).iter().map(|item| !item).collect()
+                    })),
+                }
             }
         }
     }

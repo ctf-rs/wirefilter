@@ -261,7 +261,7 @@ impl LogicalExpr {
             (LogicalExpr::Quantifier { op, arg }, input)
         } else {
             let (op, input) = ComparisonExpr::lex_with(input, parser)?;
-            (LogicalExpr::Comparison(op), input)
+            (op.into_logical(), input)
         })
     }
 
@@ -1215,4 +1215,105 @@ fn test() {
 
         assert_eq!(expr.execute_one(ctx), false);
     }
+}
+
+#[test]
+fn infix_negated_comparisons_normalize_and_execute_like_prefix_not() {
+    use crate::ExecutionContext;
+
+    let scheme = Scheme! {
+        bytes: Bytes,
+        int: Int,
+        ip: Ip,
+        values: Array(Bytes),
+        map: Map(Bytes),
+    }
+    .build();
+
+    let equivalent = [
+        (
+            r#"bytes !contains "admin""#,
+            r#"not bytes contains "admin""#,
+        ),
+        (
+            r#"bytes !wildcard "*admin*""#,
+            r#"not bytes wildcard "*admin*""#,
+        ),
+        (
+            r#"bytes !strict wildcard "*admin*""#,
+            r#"not bytes strict wildcard "*admin*""#,
+        ),
+        (
+            r#"bytes !in {"GET" "POST"}"#,
+            r#"not bytes in {"GET" "POST"}"#,
+        ),
+        ("int !in {1 2..4}", "not int in {1 2..4}"),
+        (
+            "ip !in {192.0.2.1 198.51.100.0/24}",
+            "not ip in {192.0.2.1 198.51.100.0/24}",
+        ),
+    ];
+
+    for (infix, prefix) in equivalent {
+        let infix = scheme.parse(infix).unwrap();
+        let prefix = scheme.parse(prefix).unwrap();
+        assert_eq!(infix, prefix);
+        assert_eq!(
+            serde_json::to_value(infix).unwrap(),
+            serde_json::to_value(prefix).unwrap()
+        );
+    }
+
+    assert!(scheme.parse(r#"int !contains "1""#).is_err());
+    assert!(scheme.parse(r#"bytes !contain "x""#).is_err());
+    assert!(scheme.parse(r#"bytes not contains "x""#).is_err());
+
+    let not_equal = scheme.parse(r#"bytes != "admin""#).unwrap();
+    assert!(!matches!(
+        not_equal.expression(),
+        LogicalExpr::Unary {
+            op: UnaryOp::Not,
+            ..
+        }
+    ));
+
+    let mut ctx = ExecutionContext::new(&scheme);
+    let execute = |source: &str, ctx: &ExecutionContext<'_, ()>| {
+        scheme
+            .parse(source)
+            .unwrap()
+            .compile()
+            .execute(ctx)
+            .unwrap()
+    };
+
+    ctx.set_field_value(
+        scheme.get_field("map").unwrap(),
+        crate::Map::new(Type::Bytes),
+    )
+    .unwrap();
+    assert!(!execute(r#"map["missing"] contains "admin""#, &ctx));
+    assert!(execute(r#"map["missing"] !contains "admin""#, &ctx));
+
+    ctx.set_field_value(scheme.get_field("bytes").unwrap(), "/admin/users")
+        .unwrap();
+    assert!(execute(r#"bytes contains "admin""#, &ctx));
+    assert!(!execute(r#"bytes !contains "admin""#, &ctx));
+    assert!(execute(r#"not bytes !contains "admin""#, &ctx));
+
+    ctx.set_field_value(
+        scheme.get_field("values").unwrap(),
+        crate::Array::from_iter(["public", "admin"]),
+    )
+    .unwrap();
+    assert_eq!(
+        scheme
+            .parser()
+            .lex_as::<LogicalExpr>(r#"values[*] !contains "admin""#)
+            .unwrap()
+            .0
+            .compile()
+            .execute_vec(&ctx),
+        [true, false]
+    );
 }
